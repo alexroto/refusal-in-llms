@@ -1,5 +1,7 @@
 # refusal-in-llms
 
+### Understanding refusal in LLMs
+
 This WIP is a re-implementation and eventual extension of the following: 
 
 ```
