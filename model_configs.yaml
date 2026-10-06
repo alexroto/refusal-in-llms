@@ -1,0 +1,46 @@
+# Model-dependent settings for baseline_refusal.py.
+#
+# Every model inherits `defaults`; anything set under a model overrides it
+# (`generation` is merged key by key, so you can override just one sampling param).
+#
+# Fields:
+#   model_id              HF repo id
+#   dtype                 torch dtype name (bfloat16, float16, float32)
+#   batch_size            prompts per generate() call
+#   system_prompt         null = no system message at all; "" = an explicitly empty one
+#   chat_template         null = use the tokenizer's built-in template, else a Jinja string
+#   chat_template_kwargs  extra kwargs for apply_chat_template (e.g. enable_thinking for Qwen3)
+#   trust_remote_code     needed by some older model repos
+#   generation            kwargs passed straight to model.generate()
+
+defaults:
+  dtype: bfloat16
+  batch_size: 8
+  system_prompt: null
+  chat_template: null
+  chat_template_kwargs: {}
+  trust_remote_code: false
+  generation:
+    max_new_tokens: 200
+    do_sample: true
+    temperature: 0.7
+    top_p: 0.9
+    repetition_penalty: 1.15
+
+models:
+  llama2:
+    model_id: meta-llama/Llama-2-7b-chat-hf
+
+  qwen:
+    model_id: Qwen/Qwen2.5-7B-Instruct
+    # Qwen2.5's template silently injects "You are Qwen, created by Alibaba Cloud..."
+    # when there is no system message. An empty string suppresses that so the
+    # baseline stays "no system prompt", like Llama-2.
+    system_prompt: ""
+
+  vicuna:
+    model_id: lmsys/vicuna-7b-v1.5
+    # Vicuna was trained with this system prompt, and its tokenizer ships without a
+    # chat template, so we supply both. Format: "<s>SYSTEM USER: ... ASSISTANT:"
+    system_prompt: "A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions."
+    chat_template: '{{ bos_token }}{% for m in messages %}{% if m["role"] == "system" %}{{ m["content"] }} {% elif m["role"] == "user" %}USER: {{ m["content"] }} {% elif m["role"] == "assistant" %}ASSISTANT: {{ m["content"] }}{{ eos_token }}{% endif %}{% endfor %}{% if add_generation_prompt %}ASSISTANT:{% endif %}'
