@@ -2,7 +2,13 @@
 
 ### Understanding refusal in LLMs
 
-This WIP is a re-implementation and eventual extension of the following: 
+This is an independent study that applies the refusal ablation technique 
+published in the paper below to areas that should trigger refusal but are not well 
+represented in the initial datasets. 
+
+Check out the work below, they're super fascinating!
+
+## Citations
 
 ```
 @article{arditi2024refusal,
