@@ -11,10 +11,11 @@ Run from a shell so a poisoned CUDA context can be recovered by restarting:
         echo "crashed, restarting"; sleep 5
     done
 
-Outputs, written next to the input data (<model> is the key from the config):
+Outputs, written under the dataset's directory in a subdirectory named after the
+model id (<model_id> is the HF id with "/" replaced by "__"):
 
-    data/<dataset>/baseline_completions_<model>.csv   completions + refusal flag
-    data/<dataset>/baseline_failed_<model>.csv        prompts that errored out
+    data/<dataset>/<model_id>/baseline_completions.csv   completions + refusal flag
+    data/<dataset>/<model_id>/baseline_failed.csv        prompts that errored out
 """
 import argparse
 import gc
@@ -66,6 +67,11 @@ class ModelConfig:
     trust_remote_code: bool = False
     generation: dict = field(default_factory=dict)
 
+    @property
+    def slug(self) -> str:
+        """Filesystem-safe model id, e.g. 'meta-llama/Llama-2-7b-chat-hf' -> 'meta-llama__Llama-2-7b-chat-hf'."""
+        return self.model_id.replace("/", "__")
+
 
 def load_model_config(path: Path, name: str) -> ModelConfig:
     """Merge `defaults` with the named model's entry. Unknown keys raise a TypeError."""
@@ -113,12 +119,12 @@ class RunPaths:
     marker: Path
 
 
-def get_run_paths(dataset: str, model_name: str) -> RunPaths:
-    out_dir = DATASETS[dataset].output_dir
+def get_run_paths(dataset: str, cfg: ModelConfig) -> RunPaths:
+    out_dir = DATASETS[dataset].output_dir / cfg.slug
     return RunPaths(
-        checkpoint=out_dir / f"baseline_completions_{model_name}.csv",
-        failed_log=out_dir / f"baseline_failed_{model_name}.csv",
-        marker=out_dir / f".baseline_in_progress_{model_name}.json",
+        checkpoint=out_dir / "baseline_completions.csv",
+        failed_log=out_dir / "baseline_failed.csv",
+        marker=out_dir / ".baseline_in_progress.json",
     )
 
 
@@ -296,7 +302,7 @@ def main() -> None:
     torch.manual_seed(SEED)
 
     cfg = load_model_config(args.config, args.model)
-    paths = get_run_paths(args.dataset, cfg.name)
+    paths = get_run_paths(args.dataset, cfg)
     paths.checkpoint.parent.mkdir(parents=True, exist_ok=True)
 
     prompts = load_prompts(DATASETS[args.dataset])
