@@ -1,6 +1,6 @@
 # refusal-in-llms
 
-### Understanding refusal in LLMs
+### About Understanding refusal in LLMs
 
 This is an independent study that applies the refusal ablation technique 
 published in the paper below to areas that should trigger refusal but are not well 
@@ -17,4 +17,13 @@ Check out the works below, they're super fascinating!
   journal={arXiv preprint arXiv:2406.11717},
   year={2024}
 }
+```
+
+### Environment
+This is a Python 3.12 project run on runpod with the following pod details:
+```aiignore
+GPU: PRO 6000 MIG 48GB1x
+vCPU: 8 (AMD EPYC 9355 32-Core Processor)
+Memory: 125 GB
+Container disk: 30 GB
 ```
