@@ -65,7 +65,9 @@ from baseline_refusal import (
 )
 
 DIRECTIONS_DIR = ROOT / "directions"
-DEFAULT_EVAL_DATA = ROOT / "data" / "mental_health" / "placeholder.csv"  # swap in the real file
+
+# placeholder path until new data is ready
+DEFAULT_EVAL_DATA = ROOT / "data" / "mental_health" / "placeholder.csv"
 
 # As in the paper, candidates from the last 20% of layers are discarded: directions
 # there tend to encode the next-token output rather than the decision to refuse.
