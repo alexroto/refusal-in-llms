@@ -203,7 +203,7 @@ def mean_kl(p: torch.Tensor, q: torch.Tensor) -> float:
 
 
 def get_refusal_token_ids(tokenizer, cfg: ModelConfig) -> list[int]:
-    refusal_token_ids = [tokenizer.encode(tok, add_special_tokens=False)[0] for tok in cfg.refusal_tokens]
+    refusal_token_ids = [tokenizer.encode(token, add_special_tokens=False)[0] for token in cfg.refusal_tokens]
     print(f"Refusal tokens {cfg.refusal_tokens} -> ids {refusal_token_ids} -> {tokenizer.convert_ids_to_tokens(refusal_token_ids)}")
     return refusal_token_ids
 
