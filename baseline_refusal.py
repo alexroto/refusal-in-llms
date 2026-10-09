@@ -22,12 +22,13 @@ import gc
 import json
 import os
 import sys
-from dataclasses import dataclass
 from pathlib import Path
 
 from utils.data_spec import DatasetSpec
+from utils.data_utils import load_prompts, load_resume_state
 from utils.model_config import ModelConfig, load_model_config
 from utils.model_utils import load_model_and_tokenizer, format_chat_prompt
+from utils.run_utils import RunPaths
 
 DEBUG_CUDA = os.environ.get("DEBUG_CUDA") == "1"
 if DEBUG_CUDA:
@@ -69,13 +70,6 @@ DATASETS = {
 }
 
 
-@dataclass(frozen=True)
-class RunPaths:
-    checkpoint: Path
-    failed_log: Path
-    marker: Path
-
-
 def get_run_paths(dataset: str, cfg: ModelConfig) -> RunPaths:
     out_dir = DATASETS[dataset].output_dir / cfg.slug
     return RunPaths(
@@ -98,45 +92,6 @@ def is_fatal_cuda_error(exc: Exception) -> bool:
 def save_failed(paths: RunPaths, prompts: pd.DataFrame, failed_ids: list[int]) -> None:
     failed = prompts[prompts["prompt_id"].isin(failed_ids)]
     failed[["prompt_id", "prompt"]].to_csv(paths.failed_log, index=False)
-
-
-# ---------------------------------------------------------------------------
-# Data + resume state
-# ---------------------------------------------------------------------------
-def load_prompts(spec: DatasetSpec) -> pd.DataFrame:
-    """Return one row per prompt: prompt_id (input row index), prompt, plus any META_COLUMNS."""
-    df = pd.read_csv(spec.input_path)
-    if spec.prompt_column not in df.columns:
-        raise ValueError(f"{spec.input_path}: missing column '{spec.prompt_column}'")
-
-    prompts = pd.DataFrame(
-        {"prompt_id": df.index, "prompt": df[spec.prompt_column].astype(str).str.strip()}
-    )
-    for column in META_COLUMNS:
-        if column in df.columns:
-            prompts[column] = df[column]
-    return prompts
-
-
-def load_resume_state(paths: RunPaths, prompts: pd.DataFrame) -> tuple[list[dict], list[int]]:
-    """Recover completed results and failed prompt ids from a previous run."""
-    failed_ids: list[int] = []
-    if paths.failed_log.exists():
-        failed_ids = pd.read_csv(paths.failed_log)["prompt_id"].tolist()
-
-    if paths.marker.exists():
-        crashed_ids = json.loads(paths.marker.read_text())
-        print(f"Previous run crashed mid-batch; logging {len(crashed_ids)} prompts as failed.")
-        failed_ids.extend(i for i in crashed_ids if i not in failed_ids)
-        save_failed(paths, prompts, failed_ids)
-        paths.marker.unlink()
-
-    results: list[dict] = []
-    if paths.checkpoint.exists():
-        results = pd.read_csv(paths.checkpoint).to_dict("records")
-        print(f"Resuming: {len(results)} prompts already completed.")
-
-    return results, failed_ids
 
 
 # ---------------------------------------------------------------------------

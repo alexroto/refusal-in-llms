@@ -53,14 +53,13 @@ from baseline_refusal import (
     DEVICE,
     ROOT,
     SEED,
-    RunPaths,
-    load_prompts,
-    load_resume_state,
     run_generation,
 )
+from utils.data_utils import load_prompts, load_resume_state
 from utils.model_utils import load_model_and_tokenizer, format_chat_prompt
 from utils.data_spec import DatasetSpec
 from utils.model_config import ModelConfig, load_model_config
+from utils.run_utils import RunPaths
 
 DIRECTIONS_DIR = ROOT / "directions"
 
