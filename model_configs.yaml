@@ -12,6 +12,8 @@
 #   chat_template_kwargs  extra kwargs for apply_chat_template (e.g. enable_thinking for Qwen3)
 #   trust_remote_code     needed by some older model repos
 #   generation            kwargs passed straight to model.generate()
+#   refusal_tokens        strings whose first token starts a refusal ("I" for "I cannot...").
+#                         Used by refusal_direction.py to score refusals from first-token logits.
 
 defaults:
   dtype: bfloat16
@@ -20,6 +22,7 @@ defaults:
   chat_template: null
   chat_template_kwargs: {}
   trust_remote_code: false
+  refusal_tokens: ["I"]
   generation:
     max_new_tokens: 200
     do_sample: true
@@ -37,6 +40,7 @@ models:
     # when there is no system message. An empty string suppresses that so the
     # baseline stays "no system prompt", like Llama-2.
     system_prompt: ""
+    refusal_tokens: ["I", "As"]
 
   vicuna:
     model_id: lmsys/vicuna-7b-v1.5

@@ -69,8 +69,8 @@ DIRECTIONS_DIR = ROOT / "directions"
 # placeholder path until new data is ready
 DEFAULT_EVAL_DATA = ROOT / "data" / "mental_health" / "placeholder.csv"
 
-# As in the paper, candidates from the last 20% of layers are discarded: directions
-# there tend to encode the next-token output rather than the decision to refuse.
+# Following the paper, candidates from the last 20% of layers are discarded.
+# directions there tend to encode the next-token output rather than the decision to refuse.
 PRUNE_LAST_FRACTION = 0.2
 EPS = 1e-8
 
@@ -79,12 +79,14 @@ EPS = 1e-8
 # Model structure + hooks
 # ---------------------------------------------------------------------------
 def get_blocks(model):
-    """Decoder blocks. Assumes a Llama/Qwen2-style layout: model.model.layers[i].{self_attn,mlp}."""
+    """
+    Decoder blocks.
+    Assumes a Llama/Qwen2-style layout: model.model.layers[i].{self_attn,mlp}.
+    """
     layers = getattr(getattr(model, "model", None), "layers", None)
     if layers is None:
         raise NotImplementedError(
-            "Expected model.model.layers (Llama/Qwen2/Mistral-style). "
-            "Other architectures need their own block accessors."
+            "configuration not implemented for model"
         )
     return layers
 
@@ -300,15 +302,15 @@ def select_best(scores: pd.DataFrame, kl_threshold: float, induce_threshold: flo
 
 
 def find_refusal_direction(model, tokenizer, cfg: ModelConfig, args) -> None:
-    out_dir = DIRECTIONS_DIR / cfg.slug
-    out_dir.mkdir(parents=True, exist_ok=True)
+    output_directory = DIRECTIONS_DIR / cfg.slug
+    output_directory.mkdir(parents=True, exist_ok=True)
     refusal_ids = get_refusal_token_ids(tokenizer, cfg)
 
     splits = build_splits(model, tokenizer, cfg, refusal_ids, args.n_train, args.n_val)
     texts = {
         name: [format_chat_prompt(tokenizer, cfg, p) for p in df["prompt"]] for name, df in splits.items()
     }
-    (out_dir / "splits.json").write_text(
+    (output_directory / "splits.json").write_text(
         json.dumps({name: df["prompt_id"].tolist() for name, df in splits.items()}, indent=2)
     )
 
@@ -316,7 +318,7 @@ def find_refusal_direction(model, tokenizer, cfg: ModelConfig, args) -> None:
     mean_harmful = mean_activations(model, tokenizer, texts["harmful_train"], args.n_positions, cfg.batch_size)
     mean_harmless = mean_activations(model, tokenizer, texts["harmless_train"], args.n_positions, cfg.batch_size)
     mean_diffs = mean_harmful - mean_harmless  # [n_positions, n_layers, d_model]
-    torch.save(mean_diffs, out_dir / "candidate_mean_diffs.pt")
+    torch.save(mean_diffs, output_directory / "candidate_mean_diffs.pt")
 
     baseline_harmful = refusal_scores(model, tokenizer, texts["harmful_val"], refusal_ids, cfg.batch_size)
     print(f"Mean refusal score on harmful val prompts, no ablation: {baseline_harmful.mean():.2f}")
@@ -325,12 +327,12 @@ def find_refusal_direction(model, tokenizer, cfg: ModelConfig, args) -> None:
     scores = score_candidates(
         model, tokenizer, mean_diffs, texts["harmful_val"], texts["harmless_val"], refusal_ids, cfg.batch_size
     )
-    scores.to_csv(out_dir / "candidate_scores.csv", index=False)
+    scores.to_csv(output_directory / "candidate_scores.csv", index=False)
     print(scores.sort_values("ablated_refusal_score").head(5).to_string(index=False))
 
     best = select_best(scores, args.kl_threshold, args.induce_threshold)
     layer, pos_idx = int(best["layer"]), int(best["pos_idx"])
-    torch.save(mean_diffs[pos_idx, layer].clone(), out_dir / "refusal_direction.pt")
+    torch.save(mean_diffs[pos_idx, layer].clone(), output_directory / "refusal_direction.pt")
     metadata = {
         "model_id": cfg.model_id,
         "layer": layer,
@@ -346,8 +348,8 @@ def find_refusal_direction(model, tokenizer, cfg: ModelConfig, args) -> None:
         "induce_threshold": args.induce_threshold,
         "seed": SEED,
     }
-    (out_dir / "refusal_direction.json").write_text(json.dumps(metadata, indent=2))
-    print(f"Selected layer {layer}, position {metadata['position']}. Saved to {out_dir}")
+    (output_directory / "refusal_direction.json").write_text(json.dumps(metadata, indent=2))
+    print(f"Selected layer {layer}, position {metadata['position']}. Saved to {output_directory}")
 
 
 # ---------------------------------------------------------------------------
@@ -395,7 +397,7 @@ def run_ablation(model, tokenizer, cfg: ModelConfig, args) -> None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--model", required=True, help="Model key in the config file (e.g. llama2)")
-    parser.add_argument("--stage", choices=["direction", "ablate", "all"], default="all")
+    parser.add_argument("--stage", choices=["find_refusal_direction", "ablate_refusal_direction", "all"], default="all")
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH)
 
     direction = parser.add_argument_group("direction stage")
@@ -417,23 +419,23 @@ def main() -> None:
     torch.manual_seed(SEED)
     cfg = load_model_config(args.config, args.model)
 
-    do_direction = args.stage in ("direction", "all")
-    do_ablate = args.stage in ("ablate", "all")
+    calculate_refusal_direction = args.stage in ("find_refusal_direction", "all")
+    ablate_refusal_direction = args.stage in ("ablate_refusal_direction", "all")
 
     # Fail fast, before the model loads.
-    if do_ablate and not args.eval_data.exists():
+    if ablate_refusal_direction and not args.eval_data.exists():
         raise FileNotFoundError(
             f"{args.eval_data} not found. Point --eval-data at your CSV (needs a '{args.prompt_column}' column), "
             "or use --stage direction for now."
         )
-    direction_path = DIRECTIONS_DIR / cfg.slug / "refusal_direction.pt"
-    if args.stage == "ablate" and args.condition == "ablated" and not direction_path.exists():
-        raise FileNotFoundError(f"{direction_path} not found. Run --stage direction first.")
+    refusal_direction_tensor_path = DIRECTIONS_DIR / cfg.slug / "refusal_direction.pt"
+    if args.stage == "ablate_refusal_direction" and args.condition == "ablated" and not refusal_direction_tensor_path.exists():
+        raise FileNotFoundError(f"{refusal_direction_tensor_path} not found. Run --stage direction first.")
 
     model, tokenizer = load_model_and_tokenizer(cfg)
-    if do_direction:
+    if calculate_refusal_direction:
         find_refusal_direction(model, tokenizer, cfg, args)
-    if do_ablate:
+    if ablate_refusal_direction:
         run_ablation(model, tokenizer, cfg, args)
 
 

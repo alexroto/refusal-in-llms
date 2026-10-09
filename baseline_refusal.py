@@ -66,6 +66,8 @@ class ModelConfig:
     chat_template_kwargs: dict = field(default_factory=dict)
     trust_remote_code: bool = False
     generation: dict = field(default_factory=dict)
+    # Strings whose first token marks the start of a refusal (used by refusal_direction.py).
+    refusal_tokens: list = field(default_factory=list)
 
     @property
     def slug(self) -> str:
