@@ -303,8 +303,8 @@ def main() -> None:
     args = parse_args()
     torch.manual_seed(SEED)
 
-    cfg = load_model_config(args.config, args.model)
-    paths = get_run_paths(args.dataset, cfg)
+    model_config = load_model_config(args.config, args.model)
+    paths = get_run_paths(args.dataset, model_config)
     paths.checkpoint.parent.mkdir(parents=True, exist_ok=True)
 
     prompts = load_prompts(DATASETS[args.dataset])
@@ -315,8 +315,8 @@ def main() -> None:
     print(f"{len(pending)} prompts remaining.")
 
     if not pending.empty:
-        model, tokenizer = load_model_and_tokenizer(cfg)
-        run_generation(model, tokenizer, cfg, pending, prompts, paths, results, failed_ids)
+        model, tokenizer = load_model_and_tokenizer(model_config)
+        run_generation(model, tokenizer, model_config, pending, prompts, paths, results, failed_ids)
 
     results_df = pd.DataFrame(results)
     if results_df.empty:
@@ -327,7 +327,7 @@ def main() -> None:
     label = "refusal rate" if args.dataset == "harmful" else "false-refusal rate"
     rate = results_df["looks_like_refusal_flag"].mean()
     print(f"Done. {len(results_df)} completions saved to {paths.checkpoint}")
-    print(f"Baseline {label} ({cfg.name}, {args.dataset}): {rate:.2%}")
+    print(f"Baseline {label} ({model_config.name}, {args.dataset}): {rate:.2%}")
     if failed_ids:
         print(f"{len(failed_ids)} prompts failed and were logged to {paths.failed_log}")
 
