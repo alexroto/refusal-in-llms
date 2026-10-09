@@ -22,8 +22,12 @@ import gc
 import json
 import os
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
+
+from utils.data_spec import DatasetSpec
+from utils.model_config import ModelConfig, load_model_config
+from utils.model_utils import load_model_and_tokenizer, format_chat_prompt
 
 DEBUG_CUDA = os.environ.get("DEBUG_CUDA") == "1"
 if DEBUG_CUDA:
@@ -50,55 +54,6 @@ REFUSAL_MARKERS = [
 
 # Optional input columns carried through to the output (useful for per-topic analysis).
 META_COLUMNS = ["source", "topic", "topic_name"]
-
-
-# ---------------------------------------------------------------------------
-# Config
-# ---------------------------------------------------------------------------
-@dataclass(frozen=True)
-class ModelConfig:
-    name: str
-    model_id: str
-    dtype: str = "bfloat16"
-    batch_size: int = 8
-    system_prompt: str | None = None
-    chat_template: str | None = None
-    chat_template_kwargs: dict = field(default_factory=dict)
-    trust_remote_code: bool = False
-    generation: dict = field(default_factory=dict)
-    # Strings whose first token marks the start of a refusal (used by refusal_direction.py).
-    refusal_tokens: list = field(default_factory=list)
-
-    @property
-    def slug(self) -> str:
-        """Filesystem-safe model id, e.g. 'meta-llama/Llama-2-7b-chat-hf' -> 'meta-llama__Llama-2-7b-chat-hf'."""
-        return self.model_id.replace("/", "__")
-
-
-def load_model_config(path: Path, name: str) -> ModelConfig:
-    """Merge `defaults` with the named model's entry. Unknown keys raise a TypeError."""
-    with open(path) as f:
-        raw = yaml.safe_load(f)
-
-    models = raw["models"]
-    if name not in models:
-        raise ValueError(f"Unknown model '{name}'. Available: {sorted(models)}")
-
-    defaults = raw.get("defaults", {})
-    merged = {**defaults, **models[name]}
-    merged["generation"] = {
-        **defaults.get("generation", {}),
-        **models[name].get("generation", {}),
-    }
-    return ModelConfig(name=name, **merged)
-
-
-@dataclass(frozen=True)
-class DatasetSpec:
-    input_path: Path
-    prompt_column: str
-    output_dir: Path
-
 
 DATASETS = {
     "harmful": DatasetSpec(
@@ -127,44 +82,6 @@ def get_run_paths(dataset: str, cfg: ModelConfig) -> RunPaths:
         checkpoint=out_dir / "baseline_completions.csv",
         failed_log=out_dir / "baseline_failed.csv",
         marker=out_dir / ".baseline_in_progress.json",
-    )
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-def load_model_and_tokenizer(cfg: ModelConfig):
-    tokenizer = AutoTokenizer.from_pretrained(
-        cfg.model_id, token=HF_TOKEN, trust_remote_code=cfg.trust_remote_code
-    )
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-    tokenizer.padding_side = "left"
-    if cfg.chat_template is not None:
-        tokenizer.chat_template = cfg.chat_template
-
-    model = AutoModelForCausalLM.from_pretrained(
-        cfg.model_id,
-        token=HF_TOKEN,
-        dtype=getattr(torch, cfg.dtype),
-        trust_remote_code=cfg.trust_remote_code,
-    ).to(DEVICE)
-    model.eval()
-    return model, tokenizer
-
-
-def format_chat_prompt(tokenizer, cfg: ModelConfig, prompt: str) -> str:
-    # system_prompt=None means no system message, so the baseline isn't confounded by
-    # extra safety instructions. See model_configs.yaml for per-model exceptions.
-    messages = []
-    if cfg.system_prompt is not None:
-        messages.append({"role": "system", "content": cfg.system_prompt})
-    messages.append({"role": "user", "content": prompt})
-    return tokenizer.apply_chat_template(
-        messages,
-        tokenize=False,
-        add_generation_prompt=True,
-        **cfg.chat_template_kwargs,
     )
 
 

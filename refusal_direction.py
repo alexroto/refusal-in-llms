@@ -53,16 +53,14 @@ from baseline_refusal import (
     DEVICE,
     ROOT,
     SEED,
-    DatasetSpec,
-    ModelConfig,
     RunPaths,
-    format_chat_prompt,
-    load_model_and_tokenizer,
-    load_model_config,
     load_prompts,
     load_resume_state,
     run_generation,
 )
+from utils.model_utils import load_model_and_tokenizer, format_chat_prompt
+from utils.data_spec import DatasetSpec
+from utils.model_config import ModelConfig, load_model_config
 
 DIRECTIONS_DIR = ROOT / "directions"
 
@@ -211,7 +209,7 @@ def get_refusal_token_ids(tokenizer, cfg: ModelConfig) -> list[int]:
 # ---------------------------------------------------------------------------
 # Stage 1: find the direction
 # ---------------------------------------------------------------------------
-def build_splits(model, tokenizer, cfg, refusal_ids, n_train: int, n_val: int) -> dict[str, pd.DataFrame]:
+def build_splits(model, tokenizer, model_config, refusal_token_ids, n_train: int, n_val: int) -> dict[str, pd.DataFrame]:
     """Shuffle each pool, keep prompts where the model behaves as expected, split train/val.
 
     Like the paper, this keeps only harmful prompts the model refuses and harmless
@@ -221,21 +219,21 @@ def build_splits(model, tokenizer, cfg, refusal_ids, n_train: int, n_val: int) -
     need = n_train + n_val
     splits = {}
     for label, keep_refusals in (("harmful", True), ("harmless", False)):
-        pool = load_prompts(DATASETS[label]).sample(frac=1, random_state=SEED).reset_index(drop=True)
-        texts = [format_chat_prompt(tokenizer, cfg, p) for p in pool["prompt"]]
-        scores = refusal_scores(model, tokenizer, texts, refusal_ids, cfg.batch_size)
+        prompts = load_prompts(DATASETS[label]).sample(frac=1, random_state=SEED).reset_index(drop=True)
+        formatted_prompts = [format_chat_prompt(tokenizer, model_config, p) for p in prompts["prompt"]]
+        scores = refusal_scores(model, tokenizer, formatted_prompts, refusal_token_ids, model_config.batch_size)
         keep = (scores > 0) if keep_refusals else (scores < 0)
-        pool = pool[keep.numpy()].reset_index(drop=True)
+        prompts = prompts[keep.numpy()].reset_index(drop=True)
 
         expected = "refused" if keep_refusals else "not refused"
-        print(f"{label}: {len(pool)}/{len(texts)} prompts {expected} at the first token (need {need})")
-        if len(pool) < need:
+        print(f"{label}: {len(prompts)}/{len(formatted_prompts)} prompts {expected} at the first token (need {need})")
+        if len(prompts) < need:
             raise ValueError(
-                f"Only {len(pool)} usable {label} prompts but need n_train + n_val = {need}. "
+                f"Only {len(prompts)} usable {label} prompts but need n_train + n_val = {need}. "
                 "Lower --n-train/--n-val, or check that the refusal tokens in the config are right."
             )
-        splits[f"{label}_train"] = pool.iloc[:n_train]
-        splits[f"{label}_val"] = pool.iloc[n_train:need]
+        splits[f"{label}_train"] = prompts.iloc[:n_train]
+        splits[f"{label}_val"] = prompts.iloc[n_train:need]
     return splits
 
 
@@ -301,31 +299,38 @@ def select_best(scores: pd.DataFrame, kl_threshold: float, induce_threshold: flo
     return valid.sort_values("ablated_refusal_score").iloc[0]
 
 
-def find_refusal_direction(model, tokenizer, cfg: ModelConfig, args) -> None:
-    output_directory = DIRECTIONS_DIR / cfg.slug
+def find_refusal_direction(model, tokenizer, model_config: ModelConfig, args) -> None:
+    output_directory = DIRECTIONS_DIR / model_config.slug
     output_directory.mkdir(parents=True, exist_ok=True)
-    refusal_ids = get_refusal_token_ids(tokenizer, cfg)
+    refusal_token_ids = get_refusal_token_ids(tokenizer, model_config)
 
-    splits = build_splits(model, tokenizer, cfg, refusal_ids, args.n_train, args.n_val)
+    splits = build_splits(
+        model=model,
+        tokenizer=tokenizer,
+        model_config=model_config,
+        refusal_token_ids=refusal_token_ids,
+        n_train=args.n_train,
+        n_val=args.n_val
+    )
     texts = {
-        name: [format_chat_prompt(tokenizer, cfg, p) for p in df["prompt"]] for name, df in splits.items()
+        name: [format_chat_prompt(tokenizer, model_config, p) for p in df["prompt"]] for name, df in splits.items()
     }
     (output_directory / "splits.json").write_text(
         json.dumps({name: df["prompt_id"].tolist() for name, df in splits.items()}, indent=2)
     )
 
     print("Computing mean activations...")
-    mean_harmful = mean_activations(model, tokenizer, texts["harmful_train"], args.n_positions, cfg.batch_size)
-    mean_harmless = mean_activations(model, tokenizer, texts["harmless_train"], args.n_positions, cfg.batch_size)
+    mean_harmful = mean_activations(model, tokenizer, texts["harmful_train"], args.n_positions, model_config.batch_size)
+    mean_harmless = mean_activations(model, tokenizer, texts["harmless_train"], args.n_positions, model_config.batch_size)
     mean_diffs = mean_harmful - mean_harmless  # [n_positions, n_layers, d_model]
     torch.save(mean_diffs, output_directory / "candidate_mean_diffs.pt")
 
-    baseline_harmful = refusal_scores(model, tokenizer, texts["harmful_val"], refusal_ids, cfg.batch_size)
+    baseline_harmful = refusal_scores(model, tokenizer, texts["harmful_val"], refusal_token_ids, model_config.batch_size)
     print(f"Mean refusal score on harmful val prompts, no ablation: {baseline_harmful.mean():.2f}")
 
     print("Scoring candidate directions...")
     scores = score_candidates(
-        model, tokenizer, mean_diffs, texts["harmful_val"], texts["harmless_val"], refusal_ids, cfg.batch_size
+        model, tokenizer, mean_diffs, texts["harmful_val"], texts["harmless_val"], refusal_token_ids, model_config.batch_size
     )
     scores.to_csv(output_directory / "candidate_scores.csv", index=False)
     print(scores.sort_values("ablated_refusal_score").head(5).to_string(index=False))
@@ -334,13 +339,13 @@ def find_refusal_direction(model, tokenizer, cfg: ModelConfig, args) -> None:
     layer, pos_idx = int(best["layer"]), int(best["pos_idx"])
     torch.save(mean_diffs[pos_idx, layer].clone(), output_directory / "refusal_direction.pt")
     metadata = {
-        "model_id": cfg.model_id,
+        "model_id": model_config.model_id,
         "layer": layer,
         "position": int(best["position"]),
         "n_layers": mean_diffs.shape[1],
         "scores": {k: float(best[k]) for k in ("ablated_refusal_score", "kl_div", "induced_refusal_score", "diff_norm")},
         "baseline_harmful_val_refusal_score": baseline_harmful.mean().item(),
-        "refusal_token_ids": refusal_ids,
+        "refusal_token_ids": refusal_token_ids,
         "n_train": args.n_train,
         "n_val": args.n_val,
         "n_positions": args.n_positions,
@@ -417,7 +422,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     torch.manual_seed(SEED)
-    cfg = load_model_config(args.config, args.model)
+    model_config = load_model_config(args.config, args.model)
 
     calculate_refusal_direction = args.stage in ("find_refusal_direction", "all")
     ablate_refusal_direction = args.stage in ("ablate_refusal_direction", "all")
@@ -428,15 +433,15 @@ def main() -> None:
             f"{args.eval_data} not found. Point --eval-data at your CSV (needs a '{args.prompt_column}' column), "
             "or use --stage direction for now."
         )
-    refusal_direction_tensor_path = DIRECTIONS_DIR / cfg.slug / "refusal_direction.pt"
+    refusal_direction_tensor_path = DIRECTIONS_DIR / model_config.slug / "refusal_direction.pt"
     if args.stage == "ablate_refusal_direction" and args.condition == "ablated" and not refusal_direction_tensor_path.exists():
         raise FileNotFoundError(f"{refusal_direction_tensor_path} not found. Run --stage direction first.")
 
-    model, tokenizer = load_model_and_tokenizer(cfg)
+    model, tokenizer = load_model_and_tokenizer(model_config)
     if calculate_refusal_direction:
-        find_refusal_direction(model, tokenizer, cfg, args)
+        find_refusal_direction(model=model, tokenizer=tokenizer, model_config=model_config, args=args)
     if ablate_refusal_direction:
-        run_ablation(model, tokenizer, cfg, args)
+        run_ablation(model, tokenizer, model_config, args)
 
 
 if __name__ == "__main__":
